@@ -1,0 +1,141 @@
+# build-ipa.yml (汎用版)
+# rev: 1
+#
+# プロジェクト固有の名前を書かない。アプリ名は project.yml の `name:` から読む。
+#   - スキーム名 = プロダクト名 = project.yml の name
+#   - <name>.entitlements がリポジトリ直下にあれば ad-hoc 署名で埋め込む
+#
+# 成果物は 3 つ。すべて JST のビルド時刻を頭に付ける。
+#   <stamp>_<name>-ipa
+#   <stamp>_xcodebuild-log
+#   <stamp>_repository      … 中身は <name>/ で包む
+name: Build iOS IPA
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Set build timestamp (JST)
+        run: |
+          STAMP=$(TZ=Asia/Tokyo date +'%Y-%m-%dT%H-%M-%S+09-00')
+          echo "STAMP=$STAMP" >> "$GITHUB_ENV"
+          echo "Build stamp: $STAMP"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read app name from project.yml
+        run: |
+          APP_NAME=$(awk '/^name:/ {print $2; exit}' project.yml)
+          test -n "$APP_NAME" || { echo "::error::project.yml に name: がありません"; exit 1; }
+          echo "APP_NAME=$APP_NAME" >> "$GITHUB_ENV"
+          echo "App: $APP_NAME"
+
+      # xcodegen / xcodebuild より前に退避する (生成物を混ぜない)
+      - name: Snapshot repository
+        run: |
+          mkdir -p "/tmp/repo-snapshot/$APP_NAME"
+          rsync -a --exclude='.git' ./ "/tmp/repo-snapshot/$APP_NAME/"
+          find /tmp/repo-snapshot -type f | wc -l
+
+      - name: Upload repository snapshot (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.STAMP }}_repository
+          path: /tmp/repo-snapshot
+          include-hidden-files: true
+          if-no-files-found: error
+
+      - name: Select newest Xcode
+        run: |
+          for X in $(ls /Applications | grep -E '^Xcode' | sort -V -r); do
+            APP="/Applications/$X/Contents/Developer"
+            if [ -d "$APP" ]; then sudo xcode-select -s "$APP"; echo "Selected: $APP"; break; fi
+          done
+          xcodebuild -version
+
+      - name: Verify Xcode 26+
+        run: |
+          MAJOR=$(xcodebuild -version | head -1 | awk '{print $2}' | awk -F. '{print $1}')
+          if [ -z "$MAJOR" ] || [ "$MAJOR" -lt 26 ]; then
+            echo "::error::Xcode 26 以上が必要です"; exit 1
+          fi
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: |
+          xcodegen generate
+          test -d "$APP_NAME.xcodeproj" || { echo "::error::$APP_NAME.xcodeproj が生成されていません"; exit 1; }
+
+      - name: Build (no codesign)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project "$APP_NAME.xcodeproj" \
+            -scheme "$APP_NAME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            2>&1 | tee /tmp/xcodebuild.log
+
+      - name: Show build log tail
+        if: always()
+        run: tail -200 /tmp/xcodebuild.log || true
+
+      - name: Upload xcodebuild log (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.STAMP }}_xcodebuild-log
+          path: /tmp/xcodebuild.log
+          if-no-files-found: warn
+
+      - name: Verify .app
+        run: |
+          APP="build/Build/Products/Release-iphoneos/$APP_NAME.app"
+          test -d "$APP" || { echo "::error::$APP がありません"; exit 1; }
+          test -f "$APP/$APP_NAME" || { echo "::error::実行バイナリがありません"; exit 1; }
+          ls -la "$APP"
+          # App Intents のメタデータ (Intent を宣言しているアプリでは必要)
+          ls "$APP/Metadata.appintents" 2>/dev/null && echo "Metadata.appintents: あり" || echo "Metadata.appintents: なし"
+
+      # <name>.entitlements があれば ad-hoc 署名で埋め込む (無ければ署名しない)
+      - name: Ad-hoc sign with entitlements (if any)
+        run: |
+          APP="build/Build/Products/Release-iphoneos/$APP_NAME.app"
+          ENT="$APP_NAME.entitlements"
+          if [ -f "$ENT" ]; then
+            codesign --force --sign - --entitlements "$ENT" "$APP"
+            codesign -d --entitlements :- "$APP" || true
+          else
+            echo "entitlements なし (署名は SideStore に任せる)"
+          fi
+
+      - name: Package IPA
+        run: |
+          mkdir -p Payload
+          cp -R "build/Build/Products/Release-iphoneos/$APP_NAME.app" Payload/
+          zip -qry "$APP_NAME.ipa" Payload
+          rm -rf Payload
+          ls -lh "$APP_NAME.ipa"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.STAMP }}_${{ env.APP_NAME }}-ipa
+          path: ${{ env.APP_NAME }}.ipa
+          if-no-files-found: error

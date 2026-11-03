@@ -1,0 +1,59 @@
+# XcodeGen のプロジェクト定義。CI で `xcodegen generate` すると BridgeProbe.xcodeproj ができる。
+name: BridgeProbe
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGN_IDENTITY: ""
+
+targets:
+  BridgeProbe:
+    type: application
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Source
+    info:
+      path: Resources/Info.plist
+      properties:
+        CFBundleDisplayName: BridgeProbe
+        CFBundleShortVersionString: "2.0.0"
+        CFBundleVersion: "2"
+        NSAlarmKitUsageDescription: "LiveContainer の検証用に、短い時間でアラームを鳴らします。"
+        # ファイル App から Documents (ログ) を見られるようにする
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UILaunchScreen:
+          UIColorName: ""
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        "UISupportedInterfaceOrientations~ipad":
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.bridgeprobe
+        PRODUCT_NAME: BridgeProbe
+        TARGETED_DEVICE_FAMILY: "1,2"
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+
+schemes:
+  BridgeProbe:
+    build:
+      targets:
+        BridgeProbe: all
+    run:
+      config: Debug
+    archive:
+      config: Release
